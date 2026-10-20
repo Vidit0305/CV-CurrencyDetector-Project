@@ -1,0 +1,39 @@
+# Python virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# System and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Captured snapshots
+captures/*
+!captures/.gitkeep
+
+# Output artifacts
+outputs/*
+!outputs/.gitkeep
+
+# Training evaluation logs & plots
+evaluation/*.png
+evaluation/*.txt
+evaluation/*.json
+!evaluation/.gitkeep
+
+# Pretrained model binaries (exclude large binary weights from git)
+models/*.keras
+models/*.h5
+!models/.gitkeep
+!models/class_indices.json
