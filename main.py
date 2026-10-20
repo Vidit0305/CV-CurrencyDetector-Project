@@ -166,22 +166,7 @@ class AsyncInferenceWorker(threading.Thread):
                 time.sleep(0.005)
                 continue
 
-            # 1. Step 1: Reject Faces & Persons
-            if self.matcher.is_face_present(frame, coords):
-                with self.lock:
-                    self.predicted_class = "unknown"
-                    self.confidence = 0.95
-                continue
-
-            # 2. Step 2: Reject Plain Surfaces (shirts, skin, bare background)
-            edge_density = self.matcher.get_edge_density(roi)
-            if edge_density < config.MIN_NOTE_EDGE_DENSITY:
-                with self.lock:
-                    self.predicted_class = "unknown"
-                    self.confidence = 0.90
-                continue
-
-            # 3. Step 3: MobileNetV2 Neural Network Inference
+            # 1. Run MobileNetV2 Neural Network Inference on ROI
             rgb_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
             resized = cv2.resize(rgb_roi, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA)
             input_tensor = np.expand_dims(resized.astype(np.float32), axis=0)
@@ -189,28 +174,33 @@ class AsyncInferenceWorker(threading.Thread):
             cnn_probs = self.model.predict(input_tensor, verbose=0)[0]
             cnn_dict = {cls: float(cnn_probs[i]) for i, cls in enumerate(self.classes)}
 
-            # 4. Step 4: Banknote Color Histogram Matching
+            # 2. Banknote Color Histogram Matching on ROI
             color_scores = self.matcher.match_color_signature(roi)
 
-            # 5. Step 5: Multi-Modal Bayesian Score Fusion
-            # Fused probability: 50% CNN features + 50% HSV Banknote Color Profile
+            # 3. Multi-Modal Bayesian Decision Fusion
             fused_scores = {}
             for cls in ["10", "20", "50", "100", "200", "500"]:
                 cnn_p = cnn_dict.get(cls, 0.0)
                 col_p = color_scores.get(cls, 0.0)
-                fused_scores[cls] = 0.50 * cnn_p + 0.50 * col_p
+                fused_scores[cls] = 0.55 * cnn_p + 0.45 * col_p
 
             top_cls = max(fused_scores, key=fused_scores.get)
             top_score = fused_scores[top_cls]
+            unknown_score = cnn_dict.get("unknown", 0.0)
 
-            # Rejection check: requires sufficient confidence and color correlation
-            if top_score >= 0.40 and color_scores.get(top_cls, 0) >= 0.18:
-                final_class = top_cls
-                # Scale confidence to realistic percentage range (75% - 98%)
-                final_conf = min(0.98, max(0.72, top_score * 1.6))
-            else:
+            # Banknote physical presence verification using HSV saturation
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            mean_saturation = float(np.mean(hsv[:, :, 1]))
+
+            # Genuine banknotes have characteristic vibrant inks (mean_saturation >= 22.0)
+            # and produce a decisive fused score peak (top_score >= 0.30)
+            if mean_saturation < 22.0 or top_score < 0.30 or (unknown_score > 0.35 and unknown_score >= top_score):
                 final_class = "unknown"
-                final_conf = 0.85
+                final_conf = max(0.80, unknown_score)
+            else:
+                final_class = top_cls
+                # Scale confidence to realistic percentage range (70% - 97%)
+                final_conf = min(0.97, max(0.70, top_score * 2.0))
 
             with self.lock:
                 self.predicted_class = final_class

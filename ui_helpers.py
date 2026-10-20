@@ -25,9 +25,9 @@ class PredictionSmoother:
 
     def __init__(
         self,
-        window_size: int = 8,
-        min_consistency_count: int = 5,
-        confidence_threshold: float = config.CONFIDENCE_THRESHOLD,
+        window_size: int = 5,
+        min_consistency_count: int = 2,
+        confidence_threshold: float = 0.40,
     ):
         self.window_size = window_size
         self.min_consistency_count = min_consistency_count
@@ -45,10 +45,10 @@ class PredictionSmoother:
         """
         self.history.append((predicted_class, float(confidence)))
 
-        if len(self.history) < 3:
-            self.current_stable_class = None
+        if len(self.history) < 2:
+            self.current_stable_class = predicted_class if predicted_class != "unknown" else None
             self.current_confidence = confidence
-            self.status_state = "UNCERTAIN"
+            self.status_state = "CURRENCY_DETECTED" if predicted_class != "unknown" else "NO_CURRENCY"
             return self.current_stable_class, self.current_confidence, self.status_state
 
         class_counts = Counter(item[0] for item in self.history)
@@ -63,15 +63,12 @@ class PredictionSmoother:
             self.status_state = "NO_CURRENCY"
             return self.current_stable_class, self.current_confidence, self.status_state
 
-        if top_count >= self.min_consistency_count and avg_confidence >= self.confidence_threshold:
+        if top_count >= self.min_consistency_count:
             self.current_stable_class = most_common_class
             self.status_state = "CURRENCY_DETECTED"
-        elif top_count >= 3:
-            self.current_stable_class = None
-            self.status_state = "UNCERTAIN"
         else:
-            self.current_stable_class = None
-            self.status_state = "NO_CURRENCY"
+            self.current_stable_class = most_common_class
+            self.status_state = "UNCERTAIN"
 
         return self.current_stable_class, self.current_confidence, self.status_state
 
@@ -85,11 +82,11 @@ class PredictionSmoother:
 
 def get_roi_coordinates(frame_width: int, frame_height: int) -> Tuple[int, int, int, int]:
     """Calculate centered bounding box coordinates (x1, y1, x2, y2) for the note ROI."""
-    roi_w = min(config.ROI_WIDTH, int(frame_width * 0.65))
-    roi_h = min(config.ROI_HEIGHT, int(frame_height * 0.55))
+    roi_w = min(720, int(frame_width * 0.72))
+    roi_h = min(340, int(frame_height * 0.62))
 
     x1 = (frame_width - roi_w) // 2
-    y1 = (frame_height - roi_h) // 2 - 25
+    y1 = (frame_height - roi_h) // 2 - 10
     x2 = x1 + roi_w
     y2 = y1 + roi_h
 

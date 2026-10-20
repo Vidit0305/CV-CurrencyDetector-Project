@@ -103,9 +103,9 @@ ROI_WIDTH = 620
 ROI_HEIGHT = 295
 
 # Banknote Texture & Presence Thresholds
-MIN_NOTE_EDGE_DENSITY = 0.038    # Real banknotes have rich guilloche engraving texture (> 0.04)
-CONFIDENCE_THRESHOLD = 0.60      # Minimum confidence for confirmed classification
-UNKNOWN_CONFIDENCE_THRESHOLD = 0.60
+MIN_NOTE_EDGE_DENSITY = 0.002    # Permissive to indoor webcam video
+CONFIDENCE_THRESHOLD = 0.40      # Confirmed positive classification threshold
+UNKNOWN_CONFIDENCE_THRESHOLD = 0.45
 
 # Image Quality Check Thresholds
 BLUR_THRESHOLD = 50.0           # Laplacian variance threshold below which image is blurry
