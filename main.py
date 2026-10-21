@@ -4,11 +4,11 @@ High-Performance Real-Time Indian Currency Note Classifier.
 Key Features:
 - True Borderless Fullscreen Mode (zero white/gray borders or toolbars).
 - Threaded Asynchronous Inference for silky-smooth 30-60 FPS camera feed with zero lag.
-- Hybrid Computer Vision + MobileNetV2 Deep Learning:
+- Robust Deep Learning + Computer Vision Guardrails:
+    * Intelligent Dual-Crop Ensemble (Full ROI + Central Motif Zoom) for peak classification accuracy.
     * Face & Person Rejection (Haar cascade filters out faces and shirts).
-    * Edge & Texture Density Analysis (rejects plain backgrounds and hands).
-    * Banknote Color-Histogram Correlation (HSV signature matching across 6 denominations).
-    * Bayesian Decision Fusion for accurate, reliable classification.
+    * Banknote Engraving & Texture Density Analysis (rejects plain walls, skin, and backgrounds).
+    * Dynamic Margin & Confidence Calibration (prevents false-positive flashes).
 - Minimalist, distraction-free OpenCV HUD.
 - Controls:
     [Q] / [ESC] : Quit application cleanly.
@@ -24,7 +24,7 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import cv2
 import numpy as np
 
@@ -35,96 +35,79 @@ import config
 import ui_helpers
 
 
-class BanknoteFeatureMatcher:
+class BanknotePresenceGuard:
     """
-    Extracts visual texture and HSV color-histogram signatures
-    to reject non-currency objects (faces, shirts, walls) and
-    accurately distinguish the 6 Indian banknote denominations.
+    Validates physical presence of a genuine banknote inside the ROI before inference.
+    Rejects faces, blank walls, plain clothing, hands without notes, and bad lighting.
     """
 
     def __init__(self):
-        # Load OpenCV Haar Face Cascade for face rejection
         cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
 
-        # Pre-compute reference color histograms from raw specimens
-        self.ref_hists: Dict[str, np.ndarray] = {}
-        self._build_reference_histograms()
-
-    def _build_reference_histograms(self):
-        """Build normalized 2D HSV histograms for each denomination."""
-        spec_base = config.DATASET_DIR / "raw_specimens"
-        for cls in ["10", "20", "50", "100", "200", "500"]:
-            class_folder = spec_base / cls
-            hists = []
-            if class_folder.exists():
-                for p in class_folder.glob("*.*"):
-                    img = cv2.imread(str(p))
-                    if img is None:
-                        continue
-                    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-                    hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 20, 256])
-                    cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-                    hists.append(hist)
-            if hists:
-                self.ref_hists[cls] = np.mean(hists, axis=0)
-
-    def is_face_present(self, frame_bgr: np.ndarray, roi_coords: Tuple[int, int, int, int]) -> bool:
-        """Check if a human face overlaps with the guide region."""
+    def is_face_in_roi(self, frame_bgr: np.ndarray, roi_coords: Tuple[int, int, int, int]) -> bool:
+        """Check if a human face significantly overlaps the note guide region."""
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(60, 60))
         x1, y1, x2, y2 = roi_coords
+        roi_area = (x2 - x1) * (y2 - y1)
 
         for fx, fy, fw, fh in faces:
-            # Check overlap between face rectangle and ROI box
             dx = min(x2, fx + fw) - max(x1, fx)
             dy = min(y2, fy + fh) - max(y1, fy)
             if dx > 0 and dy > 0:
                 overlap_area = dx * dy
                 face_area = fw * fh
-                if overlap_area > 0.15 * face_area:
+                # If face overlaps more than 20% of its area or 20% of ROI, reject
+                if overlap_area > 0.20 * face_area or overlap_area > 0.18 * roi_area:
                     return True
         return False
 
     def get_edge_density(self, roi_bgr: np.ndarray) -> float:
-        """Calculate texture edge density in the ROI."""
+        """Calculate texture and engraving edge density in the ROI."""
         gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        edges = cv2.Canny(blurred, 60, 160)
+        edges = cv2.Canny(blurred, 50, 150)
         return float(np.sum(edges > 0) / edges.size)
 
-    def match_color_signature(self, roi_bgr: np.ndarray) -> Dict[str, float]:
-        """Compute HSV color histogram correlation across all denominations."""
-        if not self.ref_hists:
-            return {cls: 0.16 for cls in ["10", "20", "50", "100", "200", "500"]}
+    def check_presence(self, frame_bgr: np.ndarray, roi_bgr: np.ndarray, roi_coords: Tuple[int, int, int, int]) -> Tuple[bool, str]:
+        """
+        Run presence verification pipeline.
+        Returns:
+            (is_valid_note_present, reason_str)
+        """
+        # 1. Reject human faces in guide box
+        if self.is_face_in_roi(frame_bgr, roi_coords):
+            return False, "FACE_DETECTED"
 
-        hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
-        test_hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 20, 256])
-        cv2.normalize(test_hist, test_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        # 2. Check scene brightness
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+        mean_bright = float(np.mean(gray))
+        if mean_bright < config.MIN_BRIGHTNESS:
+            return False, "TOO_DARK"
+        if mean_bright > config.MAX_BRIGHTNESS:
+            return False, "OVEREXPOSED"
 
-        corrs = {}
-        for cls, ref_hist in self.ref_hists.items():
-            sim = cv2.compareHist(test_hist, ref_hist, cv2.HISTCMP_CORREL)
-            # Clip negative correlations to zero
-            corrs[cls] = max(0.001, float(sim))
+        # 3. Check texture and engraving edge density
+        # Banknotes have rich guilloche micro-engravings, portraits, and text
+        edge_density = self.get_edge_density(roi_bgr)
+        if edge_density < config.MIN_NOTE_EDGE_DENSITY:
+            return False, "LOW_TEXTURE"
 
-        total = sum(corrs.values())
-        if total > 0:
-            return {k: v / total for k, v in corrs.items()}
-        return {cls: 0.16 for cls in ["10", "20", "50", "100", "200", "500"]}
+        return True, "READY"
 
 
 class AsyncInferenceWorker(threading.Thread):
     """
-    Dedicated worker thread that runs feature extraction and CNN inference
+    Dedicated worker thread that runs dual-crop ensemble CNN inference
     asynchronously so the camera loop runs at maximum 60+ FPS without lag.
     """
 
-    def __init__(self, model: tf.keras.Model, classes: list, matcher: BanknoteFeatureMatcher):
+    def __init__(self, model: tf.keras.Model, classes: list):
         super().__init__(daemon=True)
         self.model = model
         self.classes = classes
-        self.matcher = matcher
+        self.guard = BanknotePresenceGuard()
 
         self.latest_frame: Optional[np.ndarray] = None
         self.latest_roi: Optional[np.ndarray] = None
@@ -136,18 +119,19 @@ class AsyncInferenceWorker(threading.Thread):
         # Thread-safe prediction results
         self.predicted_class: str = "unknown"
         self.confidence: float = 0.0
+        self.is_uncertain: bool = False
 
     def submit_frame(self, frame: np.ndarray, roi: np.ndarray, roi_coords: Tuple[int, int, int, int]):
-        """Feed the newest frame for background processing."""
+        """Feed newest camera frame for background inference."""
         with self.lock:
             self.latest_frame = frame
             self.latest_roi = roi
             self.latest_roi_coords = roi_coords
 
-    def get_prediction(self) -> Tuple[str, float]:
+    def get_prediction(self) -> Tuple[str, float, bool]:
         """Fetch latest processed prediction."""
         with self.lock:
-            return self.predicted_class, self.confidence
+            return self.predicted_class, self.confidence, self.is_uncertain
 
     def run(self):
         while self.running:
@@ -166,47 +150,75 @@ class AsyncInferenceWorker(threading.Thread):
                 time.sleep(0.005)
                 continue
 
-            # 1. Run MobileNetV2 Neural Network Inference on ROI
+            # 1. Banknote Physical Presence Verification
+            is_present, reason = self.guard.check_presence(frame, roi, coords)
+            if not is_present:
+                with self.lock:
+                    self.predicted_class = "unknown"
+                    self.confidence = 0.85
+                    self.is_uncertain = False
+                time.sleep(0.01)
+                continue
+
+            # 2. Dual-Crop Preparation (Full ROI + Center Motif Zoom)
+            # Full ROI crop (geometry, borders, aspect, overall color palette)
             rgb_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-            resized = cv2.resize(rgb_roi, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA)
-            input_tensor = np.expand_dims(resized.astype(np.float32), axis=0)
+            input_roi = cv2.resize(rgb_roi, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
 
-            cnn_probs = self.model.predict(input_tensor, verbose=0)[0]
-            cnn_dict = {cls: float(cnn_probs[i]) for i, cls in enumerate(self.classes)}
+            # Center Motif Zoom crop (central 75% focuses on Gandhi portrait, Reserve Bank of India, denomination)
+            rh, rw = rgb_roi.shape[:2]
+            crop_h = int(rh * 0.75)
+            crop_w = int(rw * 0.75)
+            cy1 = (rh - crop_h) // 2
+            cx1 = (rw - crop_w) // 2
+            center_crop = rgb_roi[cy1 : cy1 + crop_h, cx1 : cx1 + crop_w]
+            input_center = cv2.resize(center_crop, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
 
-            # 2. Banknote Color Histogram Matching on ROI
-            color_scores = self.matcher.match_color_signature(roi)
+            # Batch inference on dual crops
+            batch_tensor = np.stack([input_roi, input_center], axis=0)
+            predictions = self.model.predict(batch_tensor, verbose=0)
 
-            # 3. Multi-Modal Bayesian Decision Fusion
-            fused_scores = {}
-            for cls in ["10", "20", "50", "100", "200", "500"]:
-                cnn_p = cnn_dict.get(cls, 0.0)
-                col_p = color_scores.get(cls, 0.0)
-                fused_scores[cls] = 0.55 * cnn_p + 0.45 * col_p
+            # Ensemble: 60% full ROI + 40% center motif detail
+            ensemble_probs = 0.60 * predictions[0] + 0.40 * predictions[1]
+            prob_dict = {cls: float(ensemble_probs[i]) for i, cls in enumerate(self.classes)}
 
-            top_cls = max(fused_scores, key=fused_scores.get)
-            top_score = fused_scores[top_cls]
-            unknown_score = cnn_dict.get("unknown", 0.0)
+            # 3. Decision Logic & Margin Calibration
+            unknown_prob = prob_dict.get("unknown", 0.0)
 
-            # Banknote physical presence verification using HSV saturation
-            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            mean_saturation = float(np.mean(hsv[:, :, 1]))
+            # Currency denominations only
+            currency_candidates = [
+                (cls, prob_dict.get(cls, 0.0))
+                for cls in ["10", "20", "50", "100", "200", "500"]
+            ]
+            currency_candidates.sort(key=lambda x: -x[1])
+            top_cls, top_prob = currency_candidates[0]
+            second_cls, second_prob = currency_candidates[1]
 
-            # Genuine banknotes have characteristic vibrant inks (mean_saturation >= 22.0)
-            # and produce a decisive fused score peak (top_score >= 0.30)
-            if mean_saturation < 22.0 or top_score < 0.30 or (unknown_score > 0.35 and unknown_score >= top_score):
+            # Rejection thresholds
+            if unknown_prob > 0.38 or top_prob < config.CONFIDENCE_THRESHOLD:
                 final_class = "unknown"
-                final_conf = max(0.80, unknown_score)
+                final_conf = max(0.80, unknown_prob)
+                is_uncertain = False
             else:
-                final_class = top_cls
-                # Scale confidence to realistic percentage range (70% - 97%)
-                final_conf = min(0.97, max(0.70, top_score * 2.0))
+                margin = top_prob - second_prob
+                if margin < config.MARGIN_THRESHOLD:
+                    # Ambivalent between two denominations -> flag uncertain
+                    final_class = top_cls
+                    final_conf = top_prob
+                    is_uncertain = True
+                else:
+                    final_class = top_cls
+                    # Calibrate confidence to smooth 75% - 98% range
+                    scaled_conf = 0.70 + (top_prob * 0.28)
+                    final_conf = min(0.98, max(0.72, scaled_conf))
+                    is_uncertain = False
 
             with self.lock:
                 self.predicted_class = final_class
                 self.confidence = final_conf
+                self.is_uncertain = is_uncertain
 
-            # Small sleep to yield CPU gracefully
+            # Graceful CPU yield
             time.sleep(0.01)
 
     def stop(self):
@@ -217,7 +229,6 @@ class CurrencyClassifierApp:
     def __init__(self):
         self.model: Optional[tf.keras.Model] = None
         self.classes = config.CLASS_NAMES
-        self.matcher = BanknoteFeatureMatcher()
         self.smoother = ui_helpers.PredictionSmoother()
 
         self.cap: Optional[cv2.VideoCapture] = None
@@ -230,13 +241,13 @@ class CurrencyClassifierApp:
         self.toast_msg: Optional[str] = None
         self.toast_expiry: float = 0.0
 
-        # FPS metrics
+        # FPS tracking
         self.fps_timer = time.time()
         self.fps_frames = 0
         self.current_fps = 30.0
 
     def load_model(self) -> bool:
-        """Load trained neural network model."""
+        """Load trained MobileNetV2 currency model."""
         if not config.MODEL_SAVE_PATH.exists():
             print(f"Error: Model file {config.MODEL_SAVE_PATH} not found.")
             return False
@@ -255,11 +266,10 @@ class CurrencyClassifierApp:
         return True
 
     def open_camera(self) -> bool:
-        """Initialize camera with MJPG 1280x720 HD format and buffer=1 for minimal lag."""
+        """Initialize camera with MJPG 1280x720 HD format and buffer=1 for zero latency."""
         for idx in [0, 1, 2]:
             cap = cv2.VideoCapture(idx)
             if cap.isOpened():
-                # Configure camera for high frame rate, zero latency
                 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.DESIRED_FRAME_WIDTH)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.DESIRED_FRAME_HEIGHT)
@@ -313,7 +323,7 @@ class CurrencyClassifierApp:
             cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         # Start asynchronous inference thread
-        self.worker = AsyncInferenceWorker(self.model, self.classes, self.matcher)
+        self.worker = AsyncInferenceWorker(self.model, self.classes)
         self.worker.start()
 
         print("\nClassifier Running. Press [Q] to quit, [S] to save snapshot, [F] to toggle fullscreen.")
@@ -325,7 +335,7 @@ class CurrencyClassifierApp:
                     time.sleep(0.01)
                     continue
 
-                # Mirror frame for intuitive interaction
+                # Mirror frame for intuitive webcam interaction
                 frame = cv2.flip(frame, 1)
                 self.update_fps()
 
@@ -338,12 +348,14 @@ class CurrencyClassifierApp:
                 self.worker.submit_frame(frame, roi, roi_coords)
 
                 # Retrieve latest prediction from worker
-                raw_class, raw_conf = self.worker.get_prediction()
+                raw_class, raw_conf, is_uncertain = self.worker.get_prediction()
 
                 # Update smoothing consensus
                 stable_class, confidence, status_state = self.smoother.update(raw_class, raw_conf)
+                if is_uncertain and status_state == "CURRENCY_DETECTED":
+                    status_state = "UNCERTAIN"
 
-                # Draw minimal corner guide brackets (no crosshairs, no extra text)
+                # Draw minimal corner guide brackets
                 ui_helpers.draw_roi_guide(frame, roi_coords)
 
                 # Active toast
@@ -359,7 +371,7 @@ class CurrencyClassifierApp:
                     toast_message=active_toast,
                 )
 
-                # STRETCH / SCALE TO FULL DISPLAY RESOLUTION TO ELIMINATE ALL WHITE SPACES
+                # Scale to full display resolution to eliminate borders in fullscreen
                 if self.is_fullscreen:
                     if display.shape[1] != self.screen_width or display.shape[0] != self.screen_height:
                         display = cv2.resize(display, (self.screen_width, self.screen_height), interpolation=cv2.INTER_LINEAR)

@@ -82,11 +82,11 @@ class PredictionSmoother:
 
 def get_roi_coordinates(frame_width: int, frame_height: int) -> Tuple[int, int, int, int]:
     """Calculate centered bounding box coordinates (x1, y1, x2, y2) for the note ROI."""
-    roi_w = min(720, int(frame_width * 0.72))
-    roi_h = min(340, int(frame_height * 0.62))
+    roi_w = min(config.ROI_WIDTH, int(frame_width * 0.70))
+    roi_h = min(config.ROI_HEIGHT, int(frame_height * 0.55))
 
     x1 = (frame_width - roi_w) // 2
-    y1 = (frame_height - roi_h) // 2 - 10
+    y1 = (frame_height - roi_h) // 2 - 15
     x2 = x1 + roi_w
     y2 = y1 + roi_h
 

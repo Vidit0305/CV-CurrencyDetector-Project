@@ -27,12 +27,12 @@
         "6": "unknown"
     },
     "display_names": {
-        "0": "\u20b910 NOTE",
-        "1": "\u20b920 NOTE",
-        "2": "\u20b950 NOTE",
-        "3": "\u20b9100 NOTE",
-        "4": "\u20b9200 NOTE",
-        "5": "\u20b9500 NOTE",
-        "6": "UNKNOWN / NO CURRENCY"
+        "0": "Rs. 10 NOTE",
+        "1": "Rs. 20 NOTE",
+        "2": "Rs. 50 NOTE",
+        "3": "Rs. 100 NOTE",
+        "4": "Rs. 200 NOTE",
+        "5": "Rs. 500 NOTE",
+        "6": "NO CURRENCY DETECTED"
     }
 }

@@ -87,6 +87,16 @@ CLASS_METADATA = {
 IMAGE_SIZE = (224, 224)
 INPUT_SHAPE = (224, 224, 3)
 
+# Training Hyperparameters
+BATCH_SIZE = 16
+INITIAL_EPOCHS = 20
+FINE_TUNE_EPOCHS = 10
+INITIAL_LEARNING_RATE = 1e-4
+FINE_TUNE_LEARNING_RATE = 1e-5
+EARLY_STOPPING_PATIENCE = 6
+REDUCE_LR_PATIENCE = 3
+DROPOUT_RATE = 0.30
+
 # Screen & Display Settings
 SCREEN_WIDTH = 1920
 SCREEN_HEIGHT = 1080
@@ -99,16 +109,17 @@ DESIRED_FRAME_WIDTH = 1280
 DESIRED_FRAME_HEIGHT = 720
 
 # Region of Interest (ROI) Guide Box (centered 2.1:1 banknote aspect ratio)
-ROI_WIDTH = 620
-ROI_HEIGHT = 295
+ROI_WIDTH = 560
+ROI_HEIGHT = 270
 
 # Banknote Texture & Presence Thresholds
-MIN_NOTE_EDGE_DENSITY = 0.002    # Permissive to indoor webcam video
-CONFIDENCE_THRESHOLD = 0.40      # Confirmed positive classification threshold
-UNKNOWN_CONFIDENCE_THRESHOLD = 0.45
+MIN_NOTE_EDGE_DENSITY = 0.012    # Permissive to indoor webcam video while rejecting plain walls
+CONFIDENCE_THRESHOLD = 0.50      # Confirmed positive classification threshold
+UNKNOWN_CONFIDENCE_THRESHOLD = 0.40
+MARGIN_THRESHOLD = 0.12          # Minimum probability margin between top and runner-up class
 
 # Image Quality Check Thresholds
-BLUR_THRESHOLD = 50.0           # Laplacian variance threshold below which image is blurry
+BLUR_THRESHOLD = 45.0           # Laplacian variance threshold below which image is blurry
 MIN_BRIGHTNESS = 35.0           # Mean pixel value below which scene is too dark
 MAX_BRIGHTNESS = 235.0          # Mean pixel value above which scene is overexposed
 
