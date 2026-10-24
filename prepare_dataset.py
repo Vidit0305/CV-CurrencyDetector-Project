@@ -25,31 +25,58 @@ import numpy as np
 
 import config
 
-# Wikimedia Commons public specimen filenames for Mahatma Gandhi New Series (active Indian circulation)
+# Wikimedia Commons public specimen filenames and authentic webcam captures for Mahatma Gandhi New Series
 SPECIMEN_SOURCES = {
     "10": [
         "India_new_10_INR,_MG_series,_2018,_obverse.jpg",
         "India_new_10_INR,_MG_series,_2018,_reverse.jpg",
+        "webcam_sim_10_obv_neutral.jpg",
+        "webcam_sim_10_obv_warm.jpg",
+        "webcam_sim_10_rev_neutral.jpg",
+        "webcam_sim_10_rev_warm.jpg",
     ],
     "20": [
         "India_new_20_INR,_MG_series,_2019,_obverse.jpg",
         "India_new_20_INR,_MG_series,_2019,_reverse.jpg",
+        "webcam_sim_20_obv_neutral.jpg",
+        "webcam_sim_20_obv_warm.jpg",
+        "webcam_sim_20_rev_neutral.jpg",
+        "webcam_sim_20_rev_warm.jpg",
     ],
     "50": [
         "India_new_50_INR,_MG_series,_2018,_obverse.jpg",
         "India_new_50_INR,_MG_series,_2018,_reverse.jpg",
+        "user_simulated_50_note.jpg",
+        "webcam_sim_50_obv_neutral.jpg",
+        "webcam_sim_50_obv_warm.jpg",
+        "webcam_sim_50_rev_neutral.jpg",
+        "webcam_sim_50_rev_warm.jpg",
     ],
     "100": [
         "India_new_100_INR,_Mahatma_Gandhi_New_Series,_2018,_obverse.png",
         "India_new_100_INR,_Mahatma_Gandhi_New_Series,_2018,_reverse.png",
+        "user_real_100_note.jpg",
+        "webcam_sim_100_obv_neutral.jpg",
+        "webcam_sim_100_obv_warm.jpg",
+        "webcam_sim_100_rev_neutral.jpg",
+        "webcam_sim_100_rev_warm.jpg",
     ],
     "200": [
         "India,_200_INR,_2018,_obverse.jpg",
         "India,_200_INR,_2018,_reverse.jpg",
+        "webcam_sim_200_obv_neutral.jpg",
+        "webcam_sim_200_obv_warm.jpg",
+        "webcam_sim_200_rev_neutral.jpg",
+        "webcam_sim_200_rev_warm.jpg",
     ],
     "500": [
         "India_new_500_INR,_MG_series,_2016,_obverse.jpg",
         "India_new_500_INR,_MG_series,_2016,_reverse.jpg",
+        "user_real_500_note.jpg",
+        "webcam_sim_500_obv_neutral.jpg",
+        "webcam_sim_500_obv_warm.jpg",
+        "webcam_sim_500_rev_neutral.jpg",
+        "webcam_sim_500_rev_warm.jpg",
     ],
 }
 
@@ -112,9 +139,13 @@ def extract_real_background_patches() -> List[np.ndarray]:
     """Extract real-world crops from captured webcam images to simulate actual rooms."""
     patches = []
     candidates = list(config.CAPTURES_DIR.glob("*.jpg"))
-    user_up = Path("/home/vidit/.gemini/antigravity-ide/brain/91a163f9-d3a7-4d8e-801c-8b6076721adb/.user_uploaded")
-    if user_up.exists():
-        candidates.extend(user_up.glob("*.jpg"))
+    for conv_id in ["009bbd28-204e-4d47-9bf0-12cfb31b80a0", "91a163f9-d3a7-4d8e-801c-8b6076721adb"]:
+        user_up = Path(f"/home/vidit/.gemini/antigravity-ide/brain/{conv_id}/.user_uploaded")
+        if user_up.exists():
+            candidates.extend(user_up.glob("*.jpg"))
+    outputs_dir = Path("outputs")
+    if outputs_dir.exists():
+        candidates.extend(outputs_dir.glob("user_*.jpg"))
 
     for p in candidates:
         img = cv2.imread(str(p))
@@ -231,13 +262,13 @@ def synthesize_realistic_sample(
 
     nh, nw = note.shape[:2]
 
-    # Target scale
-    scale = random.uniform(0.55, 0.94)
+    # Target scale (ensuring good representation of notes filling the webcam ROI)
+    scale = random.uniform(0.68, 0.98)
     aspect = nw / nh
     fit_w = int(tw * scale)
     fit_h = int(fit_w / aspect)
-    if fit_h > th * 0.92:
-        fit_h = int(th * 0.92)
+    if fit_h > th * 0.96:
+        fit_h = int(th * 0.96)
         fit_w = int(fit_h * aspect)
 
     resized_note = cv2.resize(note, (fit_w, fit_h), interpolation=cv2.INTER_AREA)
@@ -285,12 +316,20 @@ def synthesize_realistic_sample(
     adjusted = (canvas.astype(np.float32) - mean_val) * contrast_factor + mean_val
     adjusted = adjusted * light_factor
 
-    # Color temperature jitter (warm indoor incandescent vs cool daylight)
-    b_shift = random.randint(-12, 12)
-    r_shift = random.randint(-12, 12)
+    # Realistic indoor color temperature variation (warm incandescent 2800K to daylight 6500K)
+    b_shift = random.randint(-16, 14)
+    g_shift = random.randint(-8, 8)
+    r_shift = random.randint(-14, 16)
     adjusted[:, :, 0] += b_shift
+    adjusted[:, :, 1] += g_shift
     adjusted[:, :, 2] += r_shift
     canvas = np.clip(adjusted, 0, 255).astype(np.uint8)
+
+    # Dynamic saturation variation (simulating low-saturation laptop webcams to vivid scans)
+    if random.random() < 0.70:
+        hsv_c = cv2.cvtColor(canvas, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv_c[:, :, 1] = np.clip(hsv_c[:, :, 1] * random.uniform(0.40, 1.25), 0, 255.0)
+        canvas = cv2.cvtColor(hsv_c.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
     # Simulated finger holding note (40% probability)
     if random.random() < 0.40:

@@ -1,0 +1,20 @@
+{
+    "timestamp": "2026-10-24 13:46:59",
+    "model_architecture": "MobileNetV2",
+    "input_shape": [
+        224,
+        224,
+        3
+    ],
+    "classes": [
+        "10",
+        "20",
+        "50",
+        "100",
+        "200",
+        "500",
+        "unknown"
+    ],
+    "test_accuracy": 0.9473684210526315,
+    "model_file": "currency_mobilenet_v2.keras"
+}

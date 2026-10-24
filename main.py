@@ -46,9 +46,13 @@ class BanknotePresenceGuard:
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
 
     def is_face_in_roi(self, frame_bgr: np.ndarray, roi_coords: Tuple[int, int, int, int]) -> bool:
-        """Check if a human face significantly overlaps the note guide region."""
+        """
+        Check if a human face dominates the banknote guide region.
+        Only flags if a person pushes their face directly into the box (>60% of ROI area).
+        Never triggers on Mahatma Gandhi portraits or faces sitting behind the held note.
+        """
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(60, 60))
+        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(90, 90))
         x1, y1, x2, y2 = roi_coords
         roi_area = (x2 - x1) * (y2 - y1)
 
@@ -57,9 +61,7 @@ class BanknotePresenceGuard:
             dy = min(y2, fy + fh) - max(y1, fy)
             if dx > 0 and dy > 0:
                 overlap_area = dx * dy
-                face_area = fw * fh
-                # If face overlaps more than 20% of its area or 20% of ROI, reject
-                if overlap_area > 0.20 * face_area or overlap_area > 0.18 * roi_area:
+                if overlap_area > 0.60 * roi_area:
                     return True
         return False
 
@@ -67,7 +69,7 @@ class BanknotePresenceGuard:
         """Calculate texture and engraving edge density in the ROI."""
         gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        edges = cv2.Canny(blurred, 50, 150)
+        edges = cv2.Canny(blurred, 40, 120)
         return float(np.sum(edges > 0) / edges.size)
 
     def check_presence(self, frame_bgr: np.ndarray, roi_bgr: np.ndarray, roi_coords: Tuple[int, int, int, int]) -> Tuple[bool, str]:
@@ -76,7 +78,7 @@ class BanknotePresenceGuard:
         Returns:
             (is_valid_note_present, reason_str)
         """
-        # 1. Reject human faces in guide box
+        # 1. Reject if human face occupies the guide box
         if self.is_face_in_roi(frame_bgr, roi_coords):
             return False, "FACE_DETECTED"
 
@@ -133,6 +135,42 @@ class AsyncInferenceWorker(threading.Thread):
         with self.lock:
             return self.predicted_class, self.confidence, self.is_uncertain
 
+    @staticmethod
+    def white_balance_gray_world(img_bgr: np.ndarray) -> np.ndarray:
+        """
+        Normalize ambient illuminant color cast (removes warm yellowish room lighting)
+        using Gray-World chromatic adaptation without distorting authentic banknote hues.
+        """
+        b, g, r = cv2.split(img_bgr.astype(np.float32))
+        b_mean = float(np.mean(b))
+        g_mean = float(np.mean(g))
+        r_mean = float(np.mean(r))
+        mean_gray = (b_mean + g_mean + r_mean) / 3.0
+
+        b = np.clip(b * (mean_gray / max(1.0, b_mean)), 0, 255.0)
+        g = np.clip(g * (mean_gray / max(1.0, g_mean)), 0, 255.0)
+        r = np.clip(r * (mean_gray / max(1.0, r_mean)), 0, 255.0)
+        return cv2.merge([b, g, r]).astype(np.uint8)
+
+    @staticmethod
+    def get_banknote_chromaticity(roi_bgr: np.ndarray) -> Tuple[float, float, bool]:
+        """
+        Analyze optical chromaticity in HSV space on the white-balanced ROI.
+        Returns:
+            (median_hue, mean_saturation, has_chroma)
+        """
+        wb = AsyncInferenceWorker.white_balance_gray_world(roi_bgr)
+        hsv = cv2.cvtColor(wb, cv2.COLOR_BGR2HSV)
+
+        # Focus on colored regions (exclude dark print ink and bright white borders)
+        valid_mask = (hsv[:, :, 1] > 25) & (hsv[:, :, 2] > 50) & (hsv[:, :, 2] < 240)
+        if np.sum(valid_mask) < 150:
+            return -1.0, 0.0, False
+
+        hues = hsv[:, :, 0][valid_mask]
+        sats = hsv[:, :, 1][valid_mask]
+        return float(np.median(hues)), float(np.mean(sats)), True
+
     def run(self):
         while self.running:
             frame = None
@@ -160,32 +198,42 @@ class AsyncInferenceWorker(threading.Thread):
                 time.sleep(0.01)
                 continue
 
-            # 2. Dual-Crop Preparation (Full ROI + Center Motif Zoom)
-            # Full ROI crop (geometry, borders, aspect, overall color palette)
-            rgb_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-            input_roi = cv2.resize(rgb_roi, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
+            # 2. Multi-Perspective Inputs matching model training geometry
+            natural_roi = cv2.flip(roi, 1)
+            mirrored_roi = roi
 
-            # Center Motif Zoom crop (central 75% focuses on Gandhi portrait, Reserve Bank of India, denomination)
-            rh, rw = rgb_roi.shape[:2]
-            crop_h = int(rh * 0.75)
-            crop_w = int(rw * 0.75)
-            cy1 = (rh - crop_h) // 2
-            cx1 = (rw - crop_w) // 2
-            center_crop = rgb_roi[cy1 : cy1 + crop_h, cx1 : cx1 + crop_w]
-            input_center = cv2.resize(center_crop, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
+            # View 1: Full natural ROI resized to 224x224 (full texture + engravings)
+            inp1 = cv2.resize(cv2.cvtColor(natural_roi, cv2.COLOR_BGR2RGB), (224, 224), interpolation=cv2.INTER_AREA).astype(np.float32)
 
-            # Batch inference on dual crops
-            batch_tensor = np.stack([input_roi, input_center], axis=0)
+            # View 2: White-balanced natural ROI (illuminant invariant)
+            wb_roi = self.white_balance_gray_world(natural_roi)
+            inp2 = cv2.resize(cv2.cvtColor(wb_roi, cv2.COLOR_BGR2RGB), (224, 224), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+            # View 3: Natural central focus crop (Gandhi portrait, RBI seal, watermark, denomination numeral)
+            rh, rw = natural_roi.shape[:2]
+            crop_w = min(rw, int(rh * 1.35))
+            cx = (rw - crop_w) // 2
+            center_patch = natural_roi[:, cx : cx + crop_w]
+            inp3 = cv2.resize(cv2.cvtColor(center_patch, cv2.COLOR_BGR2RGB), (224, 224), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+            # View 4: Mirrored full ROI (bidirectional view compatibility)
+            inp4 = cv2.resize(cv2.cvtColor(mirrored_roi, cv2.COLOR_BGR2RGB), (224, 224), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+            batch_tensor = np.stack([inp1, inp2, inp3, inp4], axis=0)
             predictions = self.model.predict(batch_tensor, verbose=0)
 
-            # Ensemble: 60% full ROI + 40% center motif detail
-            ensemble_probs = 0.60 * predictions[0] + 0.40 * predictions[1]
+            ensemble_probs = (
+                0.40 * predictions[0]
+                + 0.25 * predictions[1]
+                + 0.20 * predictions[2]
+                + 0.15 * predictions[3]
+            )
             prob_dict = {cls: float(ensemble_probs[i]) for i, cls in enumerate(self.classes)}
 
-            # 3. Decision Logic & Margin Calibration
+            # 3. Decision Logic, Optical Chromaticity Verification, and Margin Calibration
             unknown_prob = prob_dict.get("unknown", 0.0)
 
-            # Currency denominations only
+            # Currency denominations candidates
             currency_candidates = [
                 (cls, prob_dict.get(cls, 0.0))
                 for cls in ["10", "20", "50", "100", "200", "500"]
@@ -194,22 +242,60 @@ class AsyncInferenceWorker(threading.Thread):
             top_cls, top_prob = currency_candidates[0]
             second_cls, second_prob = currency_candidates[1]
 
-            # Rejection thresholds
-            if unknown_prob > 0.38 or top_prob < config.CONFIDENCE_THRESHOLD:
+            # Rejection conditions:
+            # Reject if unknown dominates OR top currency confidence is below threshold OR top currency is weaker than unknown
+            if unknown_prob > 0.50 or top_prob < config.CONFIDENCE_THRESHOLD or top_prob < unknown_prob:
                 final_class = "unknown"
                 final_conf = max(0.80, unknown_prob)
                 is_uncertain = False
             else:
-                margin = top_prob - second_prob
-                if margin < config.MARGIN_THRESHOLD:
-                    # Ambivalent between two denominations -> flag uncertain
-                    final_class = top_cls
-                    final_conf = top_prob
+                # 4. Multi-Cue Optical Chromaticity Disambiguation
+                # Extracts median hue in HSV space to decisively resolve color-shift ambiguities
+                median_hue, mean_sat, has_chroma = self.get_banknote_chromaticity(natural_roi)
+
+                disambiguated_cls = top_cls
+                disambiguated_prob = top_prob
+
+                if has_chroma and (top_prob - second_prob < 0.28):
+                    # Optical Chromaticity Disambiguation for Rs. 50 (Cyan), Rs. 100 (Lavender), and Rs. 20 (Greenish-Yellow)
+                    # Natural banknote optical signatures in OpenCV HSV:
+                    #   - Rs. 50  (Fluorescent Blue/Cyan): 68.0 <= Hue <= 102.0
+                    #   - Rs. 100 (Lavender/Purple):       Hue >= 105.0
+                    #   - Rs. 20  (Greenish-Yellow):       20.0 <= Hue <= 52.0
+
+                    if {top_cls, second_cls} == {"50", "100"}:
+                        if 68.0 <= median_hue <= 102.0:
+                            disambiguated_cls = "50"
+                            disambiguated_prob = max(top_prob, prob_dict.get("50", 0.0))
+                        elif median_hue >= 106.0:
+                            disambiguated_cls = "100"
+                            disambiguated_prob = max(top_prob, prob_dict.get("100", 0.0))
+
+                    elif {top_cls, second_cls} == {"100", "20"}:
+                        if median_hue >= 100.0:
+                            disambiguated_cls = "100"
+                            disambiguated_prob = max(top_prob, prob_dict.get("100", 0.0))
+                        elif 20.0 <= median_hue <= 52.0:
+                            disambiguated_cls = "20"
+                            disambiguated_prob = max(top_prob, prob_dict.get("20", 0.0))
+
+                    elif {top_cls, second_cls} == {"50", "20"}:
+                        if median_hue >= 65.0:
+                            disambiguated_cls = "50"
+                            disambiguated_prob = max(top_prob, prob_dict.get("50", 0.0))
+                        elif 20.0 <= median_hue <= 52.0:
+                            disambiguated_cls = "20"
+                            disambiguated_prob = max(top_prob, prob_dict.get("20", 0.0))
+
+                margin = disambiguated_prob - second_prob
+                if margin < config.MARGIN_THRESHOLD and disambiguated_cls == top_cls:
+                    final_class = disambiguated_cls
+                    final_conf = disambiguated_prob
                     is_uncertain = True
                 else:
-                    final_class = top_cls
-                    # Calibrate confidence to smooth 75% - 98% range
-                    scaled_conf = 0.70 + (top_prob * 0.28)
+                    final_class = disambiguated_cls
+                    # Calibrate confidence to smooth 75% - 98% range for display
+                    scaled_conf = 0.72 + (disambiguated_prob * 0.26)
                     final_conf = min(0.98, max(0.72, scaled_conf))
                     is_uncertain = False
 

@@ -117,8 +117,18 @@ class ImageCollectorApp:
         filename = f"capture_{self.current_class}_{split_name}_{timestamp}.jpg"
         save_path = class_dir / filename
 
-        # Resize to standard size (224, 224)
-        processed = cv2.resize(roi_img, config.IMAGE_SIZE, interpolation=cv2.INTER_AREA)
+        # Embed with genuine banknote aspect ratio preserved
+        rh, rw = roi_img.shape[:2]
+        tw = int(224 * 0.75)
+        th = max(1, int(tw * (rh / rw)))
+        if th > 220:
+            th = 220
+            tw = int(th * (rw / rh))
+        resized = cv2.resize(roi_img, (tw, th), interpolation=cv2.INTER_AREA)
+        processed = np.full((224, 224, 3), 128, dtype=np.uint8)
+        py = (224 - th) // 2
+        px = (224 - tw) // 2
+        processed[py : py + th, px : px + tw] = resized
         cv2.imwrite(str(save_path), processed, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
         self.session_counts[self.current_class] += 1

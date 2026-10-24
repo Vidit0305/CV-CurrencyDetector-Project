@@ -169,6 +169,8 @@ def build_model(num_classes: int = len(config.CLASS_NAMES)) -> Tuple[tf.keras.Mo
             tf.keras.layers.RandomZoom(0.08),
             tf.keras.layers.RandomTranslation(0.05, 0.05),
             tf.keras.layers.RandomFlip("horizontal"),
+            tf.keras.layers.RandomBrightness(0.15),
+            tf.keras.layers.RandomContrast(0.15),
         ],
         name="data_augmentation",
     )

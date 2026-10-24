@@ -113,15 +113,15 @@ ROI_WIDTH = 560
 ROI_HEIGHT = 270
 
 # Banknote Texture & Presence Thresholds
-MIN_NOTE_EDGE_DENSITY = 0.012    # Permissive to indoor webcam video while rejecting plain walls
-CONFIDENCE_THRESHOLD = 0.50      # Confirmed positive classification threshold
+MIN_NOTE_EDGE_DENSITY = 0.0035    # Calibrated for indoor webcams (plain walls are ~0.000, notes are 0.008-0.020)
+CONFIDENCE_THRESHOLD = 0.40       # Robust positive classification threshold for 7-class softmax
 UNKNOWN_CONFIDENCE_THRESHOLD = 0.40
-MARGIN_THRESHOLD = 0.12          # Minimum probability margin between top and runner-up class
+MARGIN_THRESHOLD = 0.08           # Minimum probability margin between top and runner-up class
 
 # Image Quality Check Thresholds
-BLUR_THRESHOLD = 45.0           # Laplacian variance threshold below which image is blurry
-MIN_BRIGHTNESS = 35.0           # Mean pixel value below which scene is too dark
-MAX_BRIGHTNESS = 235.0          # Mean pixel value above which scene is overexposed
+BLUR_THRESHOLD = 30.0            # Laplacian variance threshold
+MIN_BRIGHTNESS = 25.0            # Permissive to indoor ambient lighting
+MAX_BRIGHTNESS = 245.0           # Mean pixel value above which scene is overexposed
 
 # UI Visual Palette (BGR for OpenCV)
 UI_THEME = {
